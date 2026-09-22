@@ -1,7 +1,11 @@
 package com.tigerharkins.event_relay;
 
+import java.util.List;
 import java.util.Map;
 import java.util.UUID;
+
+import tools.jackson.core.JacksonException;
+import tools.jackson.databind.json.JsonMapper;
 
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
@@ -11,44 +15,67 @@ import org.springframework.web.bind.annotation.*;
 public class EventController {
 
     private final WebhookDeliveryService deliveryService;
-    private final EventStore eventStore;
+    private final EventRepository eventRepository;
+    private final DeliveryAttemptRepository attemptRepository;
+    private final JsonMapper jsonMapper;
 
     public EventController(
             WebhookDeliveryService deliveryService,
-            EventStore eventStore) {
+            EventRepository eventRepository,
+            DeliveryAttemptRepository attemptRepository,
+            JsonMapper jsonMapper) {
 
         this.deliveryService = deliveryService;
-        this.eventStore = eventStore;
+        this.eventRepository = eventRepository;
+        this.attemptRepository = attemptRepository;
+        this.jsonMapper = jsonMapper;
     }
 
     @PostMapping
-    public Map<String, String> createEvent(
-            @RequestBody EventRequest request) {
+    public ResponseEntity<Map<String, String>> createEvent(
+            @RequestBody EventRequest request)
+            throws JacksonException {
 
         String eventId = UUID.randomUUID().toString();
 
-        EventStatus eventStatus = new EventStatus(eventId);
+        String payloadJson =
+                jsonMapper.writeValueAsString(request.data());
 
-        eventStore.save(eventStatus);
+        EventEntity event = new EventEntity(
+                eventId,
+                request.type(),
+                request.destination(),
+                payloadJson
+        );
+
+        eventRepository.save(event);
 
         deliveryService.deliver(eventId, request);
 
-        return Map.of(
-                "eventId", eventId,
-                "status", "queued"
+        return ResponseEntity.accepted().body(
+                Map.of(
+                        "eventId", eventId,
+                        "status", "queued"
+                )
         );
     }
 
     @GetMapping("/{eventId}")
-    public ResponseEntity<EventStatus> getEvent(
+    public ResponseEntity<EventEntity> getEvent(
             @PathVariable String eventId) {
 
-        EventStatus status = eventStore.get(eventId);
+        return eventRepository
+                .findById(eventId)
+                .map(ResponseEntity::ok)
+                .orElseGet(() ->
+                        ResponseEntity.notFound().build());
+    }
 
-        if (status == null) {
-            return ResponseEntity.notFound().build();
-        }
+    @GetMapping("/{eventId}/attempts")
+    public List<DeliveryAttemptEntity> getAttempts(
+            @PathVariable String eventId) {
 
-        return ResponseEntity.ok(status);
+        return attemptRepository
+                .findByEventIdOrderByAttemptNumberAsc(eventId);
     }
 }
