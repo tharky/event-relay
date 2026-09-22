@@ -1,28 +1,54 @@
 package com.tigerharkins.event_relay;
 
 import java.util.Map;
+import java.util.UUID;
 
-import org.springframework.web.bind.annotation.PostMapping;
-import org.springframework.web.bind.annotation.RequestBody;
-import org.springframework.web.bind.annotation.RequestMapping;
-import org.springframework.web.bind.annotation.RestController;
+import org.springframework.http.ResponseEntity;
+import org.springframework.web.bind.annotation.*;
 
 @RestController
 @RequestMapping("/api/events")
 public class EventController {
 
     private final WebhookDeliveryService deliveryService;
+    private final EventStore eventStore;
 
-    public EventController(WebhookDeliveryService deliveryService) {
+    public EventController(
+            WebhookDeliveryService deliveryService,
+            EventStore eventStore) {
+
         this.deliveryService = deliveryService;
+        this.eventStore = eventStore;
     }
 
     @PostMapping
     public Map<String, String> createEvent(
             @RequestBody EventRequest request) {
 
-        deliveryService.deliver(request);
+        String eventId = UUID.randomUUID().toString();
 
-        return Map.of("status", "delivered");
+        EventStatus eventStatus = new EventStatus(eventId);
+
+        eventStore.save(eventStatus);
+
+        deliveryService.deliver(eventId, request);
+
+        return Map.of(
+                "eventId", eventId,
+                "status", "queued"
+        );
+    }
+
+    @GetMapping("/{eventId}")
+    public ResponseEntity<EventStatus> getEvent(
+            @PathVariable String eventId) {
+
+        EventStatus status = eventStore.get(eventId);
+
+        if (status == null) {
+            return ResponseEntity.notFound().build();
+        }
+
+        return ResponseEntity.ok(status);
     }
 }
